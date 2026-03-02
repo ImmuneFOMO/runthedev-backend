@@ -136,6 +136,8 @@ async fn search_servers_path(
                 Some(AuditBrief {
                     grade: audit_grade,
                     score: audit_score,
+                    status: None,
+                    message: None,
                 })
             } else {
                 None
@@ -274,6 +276,8 @@ async fn browse_servers_path(
                 Some(AuditBrief {
                     grade: audit_grade,
                     score: audit_score,
+                    status: None,
+                    message: None,
                 })
             } else {
                 None
@@ -342,6 +346,8 @@ pub async fn get_server_detail(
         Some(AuditBrief {
             grade: audit_grade,
             score: audit_score,
+            status: None,
+            message: None,
         })
     } else {
         None

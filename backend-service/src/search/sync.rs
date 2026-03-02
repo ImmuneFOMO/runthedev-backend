@@ -59,7 +59,7 @@ async fn delete_index_if_exists(meili: &MeiliClient, uid: &str) -> Result<(), Ap
 
 /// Document shape for the "servers" Meilisearch index.
 /// Only lightweight fields — NO tools, resources, prompts, connections, etc.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ServerSearchDoc {
     pub id: i32,
     pub dedup_key: String,
@@ -79,7 +79,7 @@ pub struct ServerSearchDoc {
 }
 
 /// Document shape for the "skills" Meilisearch index.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SkillSearchDoc {
     pub id: i32,
     pub dedup_key: String,
@@ -170,8 +170,7 @@ async fn sync_servers(pool: &PgPool, meili: &MeiliClient) -> Result<(), AppError
     let batch_size = 5000i64;
     let mut total = 0usize;
     loop {
-        let rows = sqlx::query_as!(
-            ServerSearchDoc,
+        let rows = sqlx::query_as::<_, ServerSearchDoc>(
             r#"
             SELECT
                 id,
@@ -194,9 +193,9 @@ async fn sync_servers(pool: &PgPool, meili: &MeiliClient) -> Result<(), AppError
             ORDER BY id
             LIMIT $2
             "#,
-            last_id,
-            batch_size,
         )
+        .bind(last_id)
+        .bind(batch_size)
         .fetch_all(pool)
         .await?;
 
@@ -296,8 +295,7 @@ async fn sync_skills(pool: &PgPool, meili: &MeiliClient) -> Result<(), AppError>
     let batch_size = 5000i64;
     let mut total = 0usize;
     loop {
-        let rows = sqlx::query_as!(
-            SkillSearchDoc,
+        let rows = sqlx::query_as::<_, SkillSearchDoc>(
             r#"
             SELECT
                 id,
@@ -320,9 +318,9 @@ async fn sync_skills(pool: &PgPool, meili: &MeiliClient) -> Result<(), AppError>
             ORDER BY id
             LIMIT $2
             "#,
-            last_id,
-            batch_size,
         )
+        .bind(last_id)
+        .bind(batch_size)
         .fetch_all(pool)
         .await?;
 

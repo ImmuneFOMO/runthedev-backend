@@ -1,0 +1,8 @@
+{
+  "name": "runthedev-backend",
+  "private": true,
+  "scripts": {
+    "typecheck": "cargo check --manifest-path cli/Cargo.toml && cargo check --manifest-path backend-service/Cargo.toml",
+    "lint": "cargo fmt --manifest-path cli/Cargo.toml --all --check && cargo fmt --manifest-path backend-service/Cargo.toml --all --check"
+  }
+}

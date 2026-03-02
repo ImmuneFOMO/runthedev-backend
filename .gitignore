@@ -34,3 +34,13 @@ docker-compose.override.yml
 
 # Generated artifacts
 batch_audit_results.json
+
+# Local release artifacts
+dist/
+
+# Local planning notes
+PLAN.md
+tasks/
+
+# Local audit batch outputs
+audit-service/batch*results*.json

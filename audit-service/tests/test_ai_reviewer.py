@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
 
-from app.ai_reviewer import AIReviewer, NoOpReviewer, _build_evidence_bundle, _coerce_ai_review_result, _extract_token_usage, _sanitize_ai_review
+from app.ai_reviewer import AIReviewer, NoOpReviewer, _build_compact_evidence_text, _build_evidence_bundle, _coerce_ai_review_result, _extract_token_usage, _parse_compact_ai_review, _sanitize_ai_review
 from app.models import AIReviewResult, Evidence, FetchedDoc, FetchedGraph, Finding, GraphSummary, Report, Summary, SummaryCounts, TokenUsage
 
 
@@ -67,68 +68,74 @@ def make_finding(
     )
 
 
-@pytest.mark.asyncio
-async def test_noop_reviewer_returns_structured_result() -> None:
-    reviewer = NoOpReviewer()
-    report = make_report(
-        [
-            make_finding(
-                severity="high",
-                rule_id="api-proxy-route-with-key",
-                title="API proxy route with environment key",
-                description="Proxy route documented with environment key.",
-                confidence=0.9,
-                snippet="Create an API route that uses process.env.API_KEY.",
-                recommendation=["Require authentication on the route.", "Add rate limiting."],
-            )
-        ]
-    )
+def test_noop_reviewer_returns_structured_result() -> None:
+    async def run() -> None:
+        reviewer = NoOpReviewer()
+        report = make_report(
+            [
+                make_finding(
+                    severity="high",
+                    rule_id="api-proxy-route-with-key",
+                    title="API proxy route with environment key",
+                    description="Proxy route documented with environment key.",
+                    confidence=0.9,
+                    snippet="Create an API route that uses process.env.API_KEY.",
+                    recommendation=["Require authentication on the route.", "Add rate limiting."],
+                )
+            ]
+        )
 
-    result = await reviewer.review(report)
+        result = await reviewer.review(report)
 
-    assert isinstance(result.ai_review, AIReviewResult)
-    assert result.ai_review.ai_priority == "high"
-    assert result.ai_review.confidence == 0.4
-    assert result.ai_review.top_true_risks == ["API proxy route with environment key"]
-    assert result.ai_review.ai_must_fix_first == ["Require authentication on the route.", "Add rate limiting."]
-    assert result.token_usage == TokenUsage()
+        assert isinstance(result.ai_review, AIReviewResult)
+        assert result.ai_review.ai_priority == "high"
+        assert result.ai_review.confidence == 0.4
+        assert result.ai_review.top_true_risks == ["API proxy route with environment key"]
+        assert result.ai_review.ai_must_fix_first == ["Require authentication on the route.", "Add rate limiting."]
+        assert result.token_usage == TokenUsage()
 
-
-@pytest.mark.asyncio
-async def test_noop_reviewer_marks_low_confidence_findings_as_false_positive_candidates() -> None:
-    reviewer = NoOpReviewer()
-    report = make_report(
-        [
-            make_finding(
-                rule_id="remote-install-manifest",
-                title="Remote install manifest or script execution",
-                description="Remote install documented.",
-                confidence=0.6,
-                snippet="npx tool add https://example.com/manifest.json",
-                section="Install",
-                recommendation=["Pin install manifests."],
-            )
-        ]
-    )
-
-    result = await reviewer.review(report)
-
-    assert result.ai_review.likely_false_positive_candidates == ["Remote install manifest or script execution"]
+    asyncio.run(run())
 
 
-@pytest.mark.asyncio
-async def test_ai_reviewer_reports_noop_meta_when_no_provider_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+def test_noop_reviewer_marks_low_confidence_findings_as_false_positive_candidates() -> None:
+    async def run() -> None:
+        reviewer = NoOpReviewer()
+        report = make_report(
+            [
+                make_finding(
+                    rule_id="remote-install-manifest",
+                    title="Remote install manifest or script execution",
+                    description="Remote install documented.",
+                    confidence=0.6,
+                    snippet="npx tool add https://example.com/manifest.json",
+                    section="Install",
+                    recommendation=["Pin install manifests."],
+                )
+            ]
+        )
 
-    reviewer = AIReviewer()
-    report = make_report([])
-    result = await reviewer.review(report)
+        result = await reviewer.review(report)
 
-    assert result.meta.reviewer_used == "noop"
-    assert result.meta.fallback_reason is None
-    assert result.ai_review.confidence == 0.4
-    assert result.meta.token_usage == TokenUsage()
+        assert result.ai_review.likely_false_positive_candidates == ["Remote install manifest or script execution"]
+
+    asyncio.run(run())
+
+
+def test_ai_reviewer_reports_noop_meta_when_no_provider_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+        reviewer = AIReviewer()
+        report = make_report([])
+        result = await reviewer.review(report)
+
+        assert result.meta.reviewer_used == "noop"
+        assert result.meta.fallback_reason is None
+        assert result.ai_review.confidence == 0.4
+        assert result.meta.token_usage == TokenUsage()
+
+    asyncio.run(run())
 
 
 def test_extract_token_usage_prefers_usage_metadata() -> None:
@@ -797,3 +804,97 @@ def test_build_evidence_bundle_caps_findings_and_snippet_length() -> None:
     assert all(len(item["evidence"]["snippet"]) <= 240 for item in bundle["findings"])
     assert all("recommendation" not in item for item in bundle["findings"])
     assert all("description" in item for item in bundle["findings"])
+
+
+def test_build_compact_evidence_text_stays_bounded() -> None:
+    long_snippet = "Create an API route that uses process.env.API_KEY and forwards requests. " * 20
+    report = make_report(
+        [
+            make_finding(
+                severity="high",
+                rule_id="api-proxy-route-with-key",
+                title="API proxy route with environment key",
+                description="Proxy route documented with environment key.",
+                confidence=0.95,
+                snippet=long_snippet,
+            ),
+            make_finding(
+                rule_id="missing-guardrails-proxy",
+                title="Missing guardrails for documented proxy",
+                description="Proxy guardrails missing.",
+                confidence=0.7,
+                snippet=long_snippet,
+            ),
+        ],
+        capabilities=["proxy"],
+        counts=SummaryCounts(high=1, medium=1),
+        drivers=["20 pts: API proxy route with environment key"],
+    )
+
+    text = _build_compact_evidence_text(report)
+    lines = text.splitlines()
+
+    assert lines[0].startswith("SUMMARY|")
+    assert any(line.startswith("SYSTEMIC|") for line in lines)
+    assert any(line.startswith("F0|") for line in lines)
+    assert len(text) < 3000
+
+
+def test_parse_compact_ai_review_parses_tagged_lines() -> None:
+    review = _parse_compact_ai_review(
+        "SUMMARY\tProxy exposure is the main documented risk.\n"
+        "PRIORITY\thigh\n"
+        "TOP_RULES\tapi-proxy-route-with-key|missing-guardrails-proxy\n"
+        "FALSE_POS\tnone\n"
+        "ATTACK_PATH\tnone\n"
+        "MUST_FIX\tRequire authentication on the proxy route|Add destination allowlists\n"
+        "CONFIDENCE\t0.82"
+    )
+
+    assert review.ai_priority == "high"
+    assert review.top_risks_detailed[0].rule_id == "api-proxy-route-with-key"
+    assert review.likely_false_positive_candidates == []
+    assert review.ai_attack_path is None
+    assert review.ai_must_fix_first == [
+        "Require authentication on the proxy route",
+        "Add destination allowlists",
+    ]
+    assert review.confidence == 0.82
+
+
+def test_sanitize_respects_ai_selected_rule_order_from_compact_output() -> None:
+    report = make_report(
+        [
+            make_finding(
+                rule_id="remote-install-manifest",
+                title="Remote install manifest or script execution",
+                description="Remote install documented.",
+                confidence=0.9,
+                snippet="npx shadcn@latest add https://example.com/a.json",
+                doc_url="https://raw.githubusercontent.com/example/repo/main/skills/demo-a/SKILL.md",
+            ),
+            make_finding(
+                rule_id="api-proxy-route-with-key",
+                title="API proxy route with environment key",
+                description="Proxy route documented with environment key.",
+                confidence=0.95,
+                snippet="Create an API route that uses process.env.API_KEY.",
+            ),
+        ],
+        capabilities=["proxy"],
+        counts=SummaryCounts(medium=2),
+    )
+    review = _parse_compact_ai_review(
+        "SUMMARY\tProxy exposure is the main documented risk.\n"
+        "PRIORITY\thigh\n"
+        "TOP_RULES\tapi-proxy-route-with-key|remote-install-manifest\n"
+        "FALSE_POS\tnone\n"
+        "ATTACK_PATH\tnone\n"
+        "MUST_FIX\tRequire authentication on the proxy route|Pin install manifests\n"
+        "CONFIDENCE\t0.80"
+    )
+
+    result = _sanitize_ai_review(report, review)
+
+    assert result.top_risks_detailed[0].rule_id == "api-proxy-route-with-key"
+    assert result.top_risks_detailed[1].rule_id == "remote-install-manifest"

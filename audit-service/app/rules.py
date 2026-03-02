@@ -67,7 +67,7 @@ CAPABILITY_PATTERNS: list[tuple[str, str, re.Pattern[str], str]] = [
     (
         "network",
         "capability-network",
-        re.compile(r"\b(httpx|axios|http requests?|fetch url|url fetching|call external api|download from url|proxy request|network access)\b", re.IGNORECASE),
+        re.compile(r"\b(httpx\b|axios\b|http requests?\b|fetch url\b|url fetching\b|call external api\b|download from url\b|proxy request\b|network access\b)\b", re.IGNORECASE),
         "Network fetch capability is documented.",
     ),
     (
@@ -210,7 +210,7 @@ SANDBOX_DISABLE_RE = re.compile(r"(--privileged|\bdisable sandbox\b|\brun as roo
 DOCKER_CONTEXT_RE = re.compile(r"\b(docker run|docker compose|docker)\b", re.IGNORECASE)
 DOCKER_PRIV_RE = re.compile(r"(--privileged|-v\s+/:/host|/var/run/docker\.sock)", re.IGNORECASE)
 APPROVAL_CLAIM_RE = re.compile(r"\b(human-in-the-loop|approval required|requires approval)\b", re.IGNORECASE)
-APPROVAL_MECHANISM_RE = re.compile(r"\b(how to enable approval|approval mode|approval config|config(?:ure|uration)?)\b", re.IGNORECASE)
+APPROVAL_MECHANISM_RE = re.compile(r"\b(how to enable approval|approval mode|approval config|config(?:ure|uration)?\b)\b", re.IGNORECASE)
 FILE_UPLOAD_RE = re.compile(
     r"\b(allowfiles|setinputfiles|multipart/form-data|file input|image upload|upload files?|attach file|dropzone|choose file|select file|drag and drop)\b",
     re.IGNORECASE,
@@ -247,7 +247,7 @@ OPERATIONAL_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 SECTION_OPERATIONAL_RE = re.compile(r"\b(capabilities?|features?|usage|setup|configuration|config|api|props?|tools?)\b", re.IGNORECASE)
-NETWORK_CONTEXT_RE = re.compile(r"\b(httpx|axios|http requests?|fetch url|url fetching|call external api|download from url|proxy request|network access)\b", re.IGNORECASE)
+NETWORK_CONTEXT_RE = re.compile(r"\b(httpx\b|axios\b|http requests?\b|fetch url\b|url fetching\b|call external api\b|download from url\b|proxy request\b|network access\b)\b", re.IGNORECASE)
 BROWSER_CONTEXT_RE = re.compile(r"\b(open browser|launch browser|browser access|headless browser|browser automation|playwright|selenium|puppeteer)\b", re.IGNORECASE)
 EMAIL_CONTEXT_RE = re.compile(r"\b(send email|smtp|mailgun|sendgrid|ses|email delivery|outbound email)\b", re.IGNORECASE)
 NOTIFICATION_CONTEXT_RE = re.compile(r"\b(send notification(?:s)?|push notification(?:s)?|desktop notification(?:s)?|toast notification(?:s)?)\b", re.IGNORECASE)

@@ -10,10 +10,8 @@ from typing import Any, Protocol
 from .models import AIReviewMeta, AIReviewResult, AIRiskDetail, Finding, Report, TokenUsage
 
 try:
-    from langchain_core.output_parsers import PydanticOutputParser
     from langchain_core.prompts import ChatPromptTemplate
 except ImportError:  # pragma: no cover
-    PydanticOutputParser = None  # type: ignore[assignment]
     ChatPromptTemplate = None  # type: ignore[assignment]
 
 try:
@@ -30,39 +28,30 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = (
     "You are a senior application security auditor. Be conservative. Do not overclaim. "
-    "Only infer what is supported by evidence. Use only the supplied audit evidence. "
+    "Use only the supplied audit evidence. Output only tagged lines in the requested format. "
     "Do not invent facts, false positives, attack steps, or deployment assumptions. "
     "Remote manifest fetching without execution primitives is a supply-chain or remote-content integrity risk, not arbitrary code execution."
 )
 USER_PROMPT_TEMPLATE = """Given this rule-based audit evidence:
 
-{bundle_json}
+{bundle_text}
 
-Produce STRICT JSON only matching this exact schema:
-{format_instructions}
+Return EXACTLY these 6 lines and nothing else:
+SUMMARY\t<1 short sentence>
+PRIORITY\t<low|medium|high|critical>
+TOP_RULES\t<rule_id>|<rule_id>|<rule_id> or none
+FALSE_POS\t<exact title or exact rule_id>|... or none
+ATTACK_PATH\t<short path or none>
+MUST_FIX\t<fix>|<fix>|<fix> or none
+CONFIDENCE\t<0.00..1.00>
 
-Hard rules:
+Rules:
 - Use ONLY the supplied evidence.
-- Do NOT speculate about attacks or secret exposure unless directly supported by the evidence.
-- Group duplicate or systemic issues by `rule_id`.
-- `top_risks_detailed` must be structured; do not embed ad-hoc capability tags in free text.
-- `likely_false_positive_candidates` must contain only exact finding titles or exact rule_ids from the provided findings, or be [].
-- `ai_attack_path` must be null if the evidence is insufficient for a plausible attack path.
-- Do NOT claim arbitrary code execution unless evidence includes an execution primitive such as:
-  `curl | bash`, `wget | sh`, `eval`, `exec`, `spawn`, `os.system`, `subprocess`, `PowerShell`, `chmod +x`, or `sh -c`.
-- For remote manifests fetched via install tools, treat them as supply-chain risk: tampering, compromised components added, or unverified remote content.
-- If you mention execution for a remote manifest case, it must be conditional and clearly implementation-dependent.
-- `ai_must_fix_first` must contain the first 1-3 concrete remediations tied directly to the evidence.
-- If there is only one medium finding and limited evidence, stay conservative.
-- No markdown. No extra keys. Keep the response concise.
-
-Tasks:
-1. Identify the single most realistically exploitable issue in context.
-2. Group duplicate or systemic issues by `rule_id`.
-3. Identify likely false positives or doc-absence weak signals from the provided findings only.
-4. Describe one plausible attack path if and only if the evidence supports one; otherwise return null.
-5. Recommend the first 1-3 fixes only.
-6. Assign overall priority consistent with the finding severities and justify it briefly in `ai_summary`.
+- Keep answers concise.
+- Do NOT claim code execution unless an execution primitive is shown.
+- For remote manifests without execution primitives, treat this as supply-chain risk.
+- FALSE_POS entries must be exact titles or exact rule_ids from the provided findings, or none.
+- If there is only limited medium evidence, stay conservative.
 """
 SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 FINDING_POINTS = {"critical": 35, "high": 20, "medium": 10, "low": 3, "info": 0}
@@ -265,9 +254,8 @@ class _LangChainReviewerBase:
 
     def __init__(self, llm: Any):
         self.llm = llm
-        if PydanticOutputParser is None or ChatPromptTemplate is None:
+        if ChatPromptTemplate is None:
             raise RuntimeError("LangChain dependencies are not installed.")
-        self.parser = PydanticOutputParser(pydantic_object=AIReviewResult)
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", SYSTEM_PROMPT),
@@ -276,18 +264,17 @@ class _LangChainReviewerBase:
         )
 
     async def review(self, report: Report) -> ProviderReviewResult:
-        bundle = _build_evidence_bundle(report)
+        bundle_text = _build_compact_evidence_text(report)
         prompt = self.prompt.format_prompt(
-            bundle_json=json.dumps(bundle, ensure_ascii=True, indent=2),
-            format_instructions=self.parser.get_format_instructions(),
+            bundle_text=bundle_text,
         )
         response = await self.llm.ainvoke(prompt.to_messages())
         token_usage = _extract_token_usage(response)
         content = _normalize_llm_content(response.content if hasattr(response, "content") else response)
-        payload = _extract_json_payload(content)
         try:
-            ai_review = self.parser.parse(payload)
+            ai_review = _parse_compact_ai_review(content)
         except Exception:
+            payload = _extract_json_payload(content)
             ai_review = _coerce_ai_review_result(payload)
         return ProviderReviewResult(ai_review=ai_review, token_usage=token_usage)
 
@@ -459,12 +446,55 @@ def _normalize_priority(value: Any) -> str:
     return "medium"
 
 
+def _normalize_compact_confidence(value: str) -> float:
+    cleaned = value.strip().strip("`'\"")
+    lowered = cleaned.casefold()
+    if lowered in {"high", "strong"}:
+        return 0.85
+    if lowered in {"medium", "moderate"}:
+        return 0.6
+    if lowered == "low":
+        return 0.35
+    if cleaned.endswith("%"):
+        try:
+            return max(0.0, min(float(cleaned[:-1].strip()) / 100.0, 1.0))
+        except ValueError:
+            return 0.7
+    try:
+        numeric = float(cleaned)
+    except ValueError:
+        return 0.7
+    if numeric > 1.0:
+        numeric = numeric / 100.0
+    return max(0.0, min(numeric, 1.0))
+
+
 def _normalize_confidence(data: dict[str, Any], most_exploitable: Any) -> float:
     if isinstance(data.get("confidence"), (int, float)):
         return max(0.0, min(float(data["confidence"]), 1.0))
     if isinstance(most_exploitable, dict) and isinstance(most_exploitable.get("confidence"), (int, float)):
         return max(0.0, min(float(most_exploitable["confidence"]), 1.0))
     return 0.7
+
+
+def _parse_pipe_list(value: str) -> list[str]:
+    cleaned = value.strip()
+    if cleaned.casefold() == "none":
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for part in cleaned.split("|"):
+        item = " ".join(part.strip().strip("`'\"").split())
+        if not item:
+            continue
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(item[:180])
+        if len(items) >= 5:
+            break
+    return items
 
 
 def _top_findings(report: Report) -> list[Finding]:
@@ -512,6 +542,71 @@ def _build_evidence_bundle(report: Report) -> dict[str, Any]:
         ],
         "findings": findings,
     }
+
+
+def _build_compact_evidence_text(report: Report) -> str:
+    bundle = _build_evidence_bundle(report)
+    summary = bundle["summary"]
+    lines = [
+        (
+            f"SUMMARY|risk_score={summary['risk_score']}|counts={json.dumps(summary['severity_counts'], separators=(',', ':'))}"
+            f"|drivers={'; '.join(summary['drivers']) or 'none'}|capabilities={','.join(bundle['capabilities']) or 'none'}"
+        )
+    ]
+    for item in bundle["systemic_summary"]:
+        lines.append(
+            f"SYSTEMIC|{item['rule_id']}|count={item['count']}|caps={','.join(item['related_capabilities']) or 'none'}"
+        )
+    for index, finding in enumerate(bundle["findings"]):
+        evidence = finding["evidence"]
+        lines.append(
+            f"F{index}|{finding['severity']}|{finding['rule_id']}|{finding['title']}|conf={finding['confidence']:.2f}|"
+            f"section={evidence.get('section') or 'none'}|snippet={evidence['snippet']}"
+        )
+    return "\n".join(lines)
+
+
+def _parse_compact_ai_review(content: str) -> AIReviewResult:
+    parsed: dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```"):
+            continue
+        if "\t" not in line:
+            continue
+        key, value = line.split("\t", 1)
+        parsed[key.strip().upper()] = value.strip()
+
+    required = {"SUMMARY", "PRIORITY", "TOP_RULES", "FALSE_POS", "ATTACK_PATH", "MUST_FIX", "CONFIDENCE"}
+    if not required.issubset(parsed):
+        raise ValueError("Reviewer did not return the required compact fields.")
+
+    top_rule_ids = _parse_pipe_list(parsed["TOP_RULES"])
+    top_risk_details = [
+        AIRiskDetail(
+            rule_id=rule_id,
+            count=1,
+            label=rule_id.replace("-", " "),
+            why="Selected by AI reviewer from the supplied findings.",
+            related_capabilities=[],
+        )
+        for rule_id in top_rule_ids[:3]
+    ]
+
+    attack_path = parsed["ATTACK_PATH"]
+    if attack_path.strip().casefold() == "none":
+        attack_path = None
+
+    return AIReviewResult(
+        ai_summary=_normalize_sentence(parsed["SUMMARY"]),
+        ai_priority=_normalize_priority(parsed["PRIORITY"]),  # type: ignore[arg-type]
+        top_true_risks=top_rule_ids[:3],
+        top_risks_detailed=top_risk_details,
+        likely_false_positive_candidates=_parse_pipe_list(parsed["FALSE_POS"]),
+        ai_attack_path=attack_path,
+        ai_must_fix_first=_parse_pipe_list(parsed["MUST_FIX"]),
+        confidence=_normalize_compact_confidence(parsed["CONFIDENCE"]),
+    )
 
 
 def _priority_from_findings(findings: list[Finding]) -> str:
@@ -840,7 +935,16 @@ def _deterministic_top_risks(
 
     llm_map = {detail.rule_id: detail for detail in llm_details if detail.rule_id in grouped_map}
     details: list[AIRiskDetail] = []
-    for rule_id, rule_findings in grouped_map.items():
+    ordered_rule_ids: list[str] = []
+    for detail in llm_details:
+        if detail.rule_id in grouped_map and detail.rule_id not in ordered_rule_ids:
+            ordered_rule_ids.append(detail.rule_id)
+    for rule_id in grouped_map:
+        if rule_id not in ordered_rule_ids:
+            ordered_rule_ids.append(rule_id)
+
+    for rule_id in ordered_rule_ids:
+        rule_findings = grouped_map[rule_id]
         llm_detail = llm_map.get(rule_id)
         display_findings = full_grouped_map.get(rule_id, rule_findings)
         details.append(
@@ -862,8 +966,14 @@ def _deterministic_top_risks(
             )
         )
 
+    llm_order = {
+        detail.rule_id: index
+        for index, detail in enumerate(llm_details)
+        if detail.why.strip() == "Selected by AI reviewer from the supplied findings."
+    }
     details.sort(
         key=lambda detail: (
+            llm_order.get(detail.rule_id, len(llm_order)),
             -_effective_rule_score(detail.rule_id, grouped_map[detail.rule_id])[0],
             -detail.count,
             detail.rule_id,

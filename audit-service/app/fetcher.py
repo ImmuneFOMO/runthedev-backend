@@ -402,6 +402,7 @@ class GitHubDocFetcher:
             self._client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
             self._owns_client = True
 
+        assert self._client is not None
         try:
             response = await self._client.request(method, url, headers=headers)
         except httpx.TimeoutException as exc:

@@ -1,9 +1,14 @@
 pub mod audit;
+pub mod cli;
 pub mod server;
 pub mod skill;
 
 // Re-exports
 pub use audit::{AuditBrief, AuditRun, CreateAuditRequest};
+pub use cli::{
+    CliAuditEntry, CliAuditFinding, CliCheckItem, CliCheckQuery, CliCheckResponse,
+    CliConnectionPayload, CliRequestAuditRequest, CliRequestAuditResponse,
+};
 pub use server::{RelatedServer, ServerDetail, ServerListItem};
 pub use skill::{RelatedSkill, SkillDetail, SkillListItem};
 

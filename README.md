@@ -27,6 +27,18 @@ Discovery and audit platform for MCP servers and Agent Skills. This monorepo con
 | **PostgreSQL** | 16-alpine | 5432 | Primary database (merged_servers, merged_skills, audit_runs) |
 | **Meilisearch** | v1.6 | 7700 | Full-text search engine |
 
+## Hackathon rules and compliance
+
+The project setup for `backend-service/`, `audit-service/`, and `cli/` follows these rules:
+
+- All projects must be built during the hackathon timeframe.
+- Teams must consist of 1 to 4 participants.
+- Use of open-source libraries, APIs, and pre-trained models is allowed, provided they are properly credited.
+- All code and demos must be submitted before the final deadline to be eligible for judging.
+- Projects must comply with applicable laws, ethical AI practices, and the hackathon code of conduct.
+- Mistral, partner, and sponsor APIs must be used in accordance with their respective terms of service.
+- The organizing team reserves the right to disqualify any team that violates the rules or engages in unfair practices.
+
 ## Quick Start (Docker)
 
 The fastest way to get everything running:
@@ -98,7 +110,17 @@ cargo run
 The server starts on `http://localhost:4000`. On first run it will:
 1. Run database migrations (creates `audit_runs` table)
 2. Sync all data to Meilisearch (may take a minute for 270k+ skills)
-3. Start background jobs (daily search sync at 03:00 UTC, audit queue at 04:00 UTC)
+3. Start background jobs (daily search sync at 03:00 UTC, audit queue at 04:00 UTC, pending audit runner loop)
+
+### Test the Backend Service
+
+```bash
+cd backend-service
+
+cargo fmt
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
 
 ### Start the Audit Service
 
@@ -121,6 +143,68 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 The audit service starts on `http://localhost:8000`. API docs at `http://localhost:8000/docs`.
+
+### Test the Audit Service
+
+```bash
+cd audit-service
+source venv/bin/activate
+
+python -m pytest
+```
+
+---
+
+## CLI (`rtd`)
+
+This repository includes the RunTheDev CLI in `cli/`.
+
+### Install CLI (macOS arm64)
+
+```bash
+curl -fsSL https://github.com/ImmuneFOMO/runthedev-backend/releases/latest/download/rtd-darwin-arm64.tar.gz | tar -xz && chmod +x rtd && sudo install -m 755 rtd /usr/local/bin/rtd && rm -f rtd && rtd version
+```
+
+### Build CLI from source
+
+```bash
+# from repo root
+cargo build --release --manifest-path cli/Cargo.toml
+./cli/target/release/rtd version
+```
+
+### Run CLI
+
+By default, `rtd` uses `http://localhost:4000` as backend URL (via `RTD_API_URL` fallback), so it works out of the box with local backend.
+
+```bash
+# install a remote MCP server config
+rtd yuna0x0/hackmd-mcp --type server
+
+# install a skill
+rtd facebook/fix --type skill
+```
+
+If you want to point CLI to a non-local backend:
+
+```bash
+export RTD_API_URL="https://api.runthedev.com"
+rtd yuna0x0/hackmd-mcp --type server
+```
+
+### Test CLI
+
+```bash
+# lint + tests
+cargo fmt --manifest-path cli/Cargo.toml
+cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path cli/Cargo.toml
+
+# smoke checks
+rtd version
+rtd check yuna0x0/hackmd-mcp --type server
+rtd check facebook/fix --type skill
+```
 
 ---
 
@@ -701,6 +785,9 @@ See the Audit Service's own docs at `http://localhost:8000/docs` for full reques
 | `MEILI_URL` | Yes | — | Meilisearch URL |
 | `MEILI_MASTER_KEY` | Yes | — | Meilisearch API key |
 | `ADMIN_API_KEY` | Yes | — | Bearer token for admin endpoints |
+| `AUDIT_SERVICE_URL` | No | `http://127.0.0.1:8000` | Base URL used by backend worker to run audits |
+| `AUDIT_POLL_INTERVAL_SECONDS` | No | `10` | How often backend polls for pending audit runs |
+| `AUDIT_HTTP_TIMEOUT_SECONDS` | No | `120` | Timeout (seconds) for backend → audit-service requests |
 | `HOST` | No | `0.0.0.0` | Bind address |
 | `PORT` | No | `4000` | Bind port |
 | `RUST_LOG` | No | `info` | Log level (trace/debug/info/warn/error) |

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.fetcher import (
@@ -27,7 +29,6 @@ class StubFetcher(GitHubDocFetcher):
         return self.documents[url]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("existing", "expected"),
     [
@@ -41,10 +42,13 @@ class StubFetcher(GitHubDocFetcher):
         ),
     ],
 )
-async def test_tree_url_resolves_skill_then_readme(existing: set[str], expected: str) -> None:
-    fetcher = StubFetcher(documents={}, existing=existing)
-    resolved = await fetcher.resolve_root_doc_url("https://github.com/acme/skills/tree/main/demo")
-    assert resolved == expected
+def test_tree_url_resolves_skill_then_readme(existing: set[str], expected: str) -> None:
+    async def run() -> None:
+        fetcher = StubFetcher(documents={}, existing=existing)
+        resolved = await fetcher.resolve_root_doc_url("https://github.com/acme/skills/tree/main/demo")
+        assert resolved == expected
+
+    asyncio.run(run())
 
 
 def test_blob_url_converts_to_raw_url() -> None:
@@ -75,27 +79,29 @@ def test_skill_dependency_resolves_to_expected_raw_urls() -> None:
     ]
 
 
-@pytest.mark.asyncio
-async def test_fetch_graph_respects_max_docs_limit() -> None:
-    root = "https://raw.githubusercontent.com/acme/skills/main/demo/SKILL.md"
-    a_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/a.md"
-    b_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/b.md"
-    c_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/c.md"
-    d_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/d.md"
+def test_fetch_graph_respects_max_docs_limit() -> None:
+    async def run() -> None:
+        root = "https://raw.githubusercontent.com/acme/skills/main/demo/SKILL.md"
+        a_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/a.md"
+        b_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/b.md"
+        c_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/c.md"
+        d_doc = "https://raw.githubusercontent.com/acme/skills/main/demo/d.md"
 
-    fetcher = StubFetcher(
-        documents={
-            root: ("# Demo\n\n[a](a.md)\n[b](b.md)\n[c](c.md)\n[d](d.md)\n", "text/markdown"),
-            a_doc: ("# A\n", "text/markdown"),
-            b_doc: ("# B\n", "text/markdown"),
-            c_doc: ("# C\n", "text/markdown"),
-            d_doc: ("# D\n", "text/markdown"),
-        }
-    )
+        fetcher = StubFetcher(
+            documents={
+                root: ("# Demo\n\n[a](a.md)\n[b](b.md)\n[c](c.md)\n[d](d.md)\n", "text/markdown"),
+                a_doc: ("# A\n", "text/markdown"),
+                b_doc: ("# B\n", "text/markdown"),
+                c_doc: ("# C\n", "text/markdown"),
+                d_doc: ("# D\n", "text/markdown"),
+            }
+        )
 
-    graph = await fetcher.fetch_graph(root, max_depth=2, max_docs=3, max_total_chars=5000)
-    fetched_urls = [document.meta.url for document in graph.docs]
+        graph = await fetcher.fetch_graph(root, max_depth=2, max_docs=3, max_total_chars=5000)
+        fetched_urls = [document.meta.url for document in graph.docs]
 
-    assert fetched_urls == [root, a_doc, b_doc]
-    assert len(graph.docs) == 3
-    assert {(edge.from_, edge.to) for edge in graph.edges} == {(root, a_doc), (root, b_doc)}
+        assert fetched_urls == [root, a_doc, b_doc]
+        assert len(graph.docs) == 3
+        assert {(edge.from_, edge.to) for edge in graph.edges} == {(root, a_doc), (root, b_doc)}
+
+    asyncio.run(run())

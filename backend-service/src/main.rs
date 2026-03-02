@@ -7,7 +7,7 @@ mod routes;
 mod search;
 mod state;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Router,
@@ -187,6 +187,16 @@ async fn main() {
         state.search_sync_permit.clone(),
     );
     jobs::spawn_audit_queue(state.db.clone());
+    let audit_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(state.config.audit_http_timeout_seconds))
+        .build()
+        .expect("Failed to create audit-service HTTP client");
+    jobs::spawn_audit_runner(
+        state.db.clone(),
+        audit_client,
+        state.config.audit_service_url.clone(),
+        state.config.audit_poll_interval_seconds,
+    );
 
     // 9. Build the router with three route groups + different rate limiters
 
@@ -208,6 +218,8 @@ async fn main() {
     // Public routes: 60 req/min (stats, categories, detail)
     let public_routes = Router::new()
         .route("/api/stats", get(routes::stats::get_stats))
+        .route("/api/cli/check", get(routes::cli::check_item))
+        .route("/api/cli/request-audit", post(routes::cli::request_audit))
         .route(
             "/api/servers/categories",
             get(routes::servers::get_server_categories),

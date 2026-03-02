@@ -46,6 +46,7 @@ services:
       RUST_LOG: info
       HOST: 0.0.0.0
       PORT: "4000"
+      AUDIT_SERVICE_URL: http://audit:8000
     depends_on:
       postgres:
         condition: service_healthy

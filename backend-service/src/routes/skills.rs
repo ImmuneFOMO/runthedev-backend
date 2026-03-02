@@ -102,10 +102,10 @@ async fn search_skills_path(
             s.id, s.dedup_key, s.skill_name, s.name, s.description, s.github_url,
             s.categories, s.quality_score, s.audit_summary,
             s.stars, s.installs, s.source_count,
-            a.grade AS audit_grade, a.score AS audit_score
+            a.id AS audit_id, a.grade AS audit_grade, a.score AS audit_score
         FROM merged_skills s
         LEFT JOIN LATERAL (
-            SELECT grade, score FROM audit_runs
+            SELECT id, grade, score FROM audit_runs
             WHERE item_type = 'skill' AND item_dedup_key = s.dedup_key AND status = 'completed'
             ORDER BY completed_at DESC LIMIT 1
         ) a ON true
@@ -127,16 +127,19 @@ async fn search_skills_path(
     let items = rows
         .iter()
         .map(|row| {
+            let audit_id: Option<i32> = row.get("audit_id");
             let audit_grade: Option<String> = row.get("audit_grade");
             let audit_score: Option<f64> = row.get("audit_score");
-            let audit = if audit_grade.is_some() || audit_score.is_some() {
-                Some(AuditBrief {
-                    grade: audit_grade,
-                    score: audit_score,
-                })
-            } else {
-                None
-            };
+            let has_completed_audit = audit_id.is_some();
+            let audit_summary = skill_audit_summary_with_runthedev(
+                row.get::<Option<serde_json::Value>, _>("audit_summary"),
+                has_completed_audit,
+            );
+            let audit = Some(skill_runthedev_audit_brief(
+                has_completed_audit,
+                audit_grade,
+                audit_score,
+            ));
             SkillListItem {
                 id: row.get("id"),
                 dedup_key: row.get("dedup_key"),
@@ -146,7 +149,7 @@ async fn search_skills_path(
                 github_url: row.get("github_url"),
                 categories: row.get("categories"),
                 quality_score: row.get("quality_score"),
-                audit_summary: row.get("audit_summary"),
+                audit_summary,
                 stars: row.get("stars"),
                 installs: row.get("installs"),
                 source_count: row.get("source_count"),
@@ -205,10 +208,10 @@ async fn browse_skills_path(
                 s.id, s.dedup_key, s.skill_name, s.name, s.description, s.github_url,
                 s.categories, s.quality_score, s.audit_summary,
                 s.stars, s.installs, s.source_count,
-                a.grade AS audit_grade, a.score AS audit_score
+                a.id AS audit_id, a.grade AS audit_grade, a.score AS audit_score
             FROM merged_skills s
             LEFT JOIN LATERAL (
-                SELECT grade, score FROM audit_runs
+                SELECT id, grade, score FROM audit_runs
                 WHERE item_type = 'skill' AND item_dedup_key = s.dedup_key AND status = 'completed'
                 ORDER BY completed_at DESC LIMIT 1
             ) a ON true
@@ -227,10 +230,10 @@ async fn browse_skills_path(
                 s.id, s.dedup_key, s.skill_name, s.name, s.description, s.github_url,
                 s.categories, s.quality_score, s.audit_summary,
                 s.stars, s.installs, s.source_count,
-                a.grade AS audit_grade, a.score AS audit_score
+                a.id AS audit_id, a.grade AS audit_grade, a.score AS audit_score
             FROM merged_skills s
             LEFT JOIN LATERAL (
-                SELECT grade, score FROM audit_runs
+                SELECT id, grade, score FROM audit_runs
                 WHERE item_type = 'skill' AND item_dedup_key = s.dedup_key AND status = 'completed'
                 ORDER BY completed_at DESC LIMIT 1
             ) a ON true
@@ -259,16 +262,19 @@ async fn browse_skills_path(
     let items = rows
         .iter()
         .map(|row| {
+            let audit_id: Option<i32> = row.get("audit_id");
             let audit_grade: Option<String> = row.get("audit_grade");
             let audit_score: Option<f64> = row.get("audit_score");
-            let audit = if audit_grade.is_some() || audit_score.is_some() {
-                Some(AuditBrief {
-                    grade: audit_grade,
-                    score: audit_score,
-                })
-            } else {
-                None
-            };
+            let has_completed_audit = audit_id.is_some();
+            let audit_summary = skill_audit_summary_with_runthedev(
+                row.get::<Option<serde_json::Value>, _>("audit_summary"),
+                has_completed_audit,
+            );
+            let audit = Some(skill_runthedev_audit_brief(
+                has_completed_audit,
+                audit_grade,
+                audit_score,
+            ));
             SkillListItem {
                 id: row.get("id"),
                 dedup_key: row.get("dedup_key"),
@@ -278,7 +284,7 @@ async fn browse_skills_path(
                 github_url: row.get("github_url"),
                 categories: row.get("categories"),
                 quality_score: row.get("quality_score"),
-                audit_summary: row.get("audit_summary"),
+                audit_summary,
                 stars: row.get("stars"),
                 installs: row.get("installs"),
                 source_count: row.get("source_count"),
@@ -288,6 +294,49 @@ async fn browse_skills_path(
         .collect();
 
     Ok((items, total))
+}
+
+fn skill_runthedev_audit_brief(
+    has_completed_audit: bool,
+    audit_grade: Option<String>,
+    audit_score: Option<f64>,
+) -> AuditBrief {
+    if has_completed_audit {
+        return AuditBrief {
+            grade: audit_grade,
+            score: audit_score,
+            status: None,
+            message: None,
+        };
+    }
+
+    AuditBrief {
+        grade: None,
+        score: None,
+        status: Some("none".to_string()),
+        message: Some("Not started".to_string()),
+    }
+}
+
+fn skill_audit_summary_with_runthedev(
+    audit_summary: Option<serde_json::Value>,
+    has_completed_audit: bool,
+) -> Option<serde_json::Value> {
+    if has_completed_audit {
+        return audit_summary;
+    }
+
+    let mut summary = match audit_summary {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+
+    summary.insert(
+        "RunTheDev".to_string(),
+        serde_json::Value::String("Not started".to_string()),
+    );
+
+    Some(serde_json::Value::Object(summary))
 }
 
 // ---------------------------------------------------------------------------
@@ -309,10 +358,10 @@ pub async fn get_skill_detail(
             s.activations, s.unique_users, s.upvotes, s.downvotes,
             s.source_count,
             s.created_at, s.updated_at,
-            a.grade AS audit_grade, a.score AS audit_score
+            a.id AS audit_id, a.grade AS audit_grade, a.score AS audit_score
         FROM merged_skills s
         LEFT JOIN LATERAL (
-            SELECT grade, score FROM audit_runs
+            SELECT id, grade, score FROM audit_runs
             WHERE item_type = 'skill' AND item_dedup_key = s.dedup_key AND status = 'completed'
             ORDER BY completed_at DESC LIMIT 1
         ) a ON true
@@ -324,16 +373,19 @@ pub async fn get_skill_detail(
     .await?
     .ok_or(AppError::NotFound)?;
 
+    let audit_id: Option<i32> = row.get("audit_id");
     let audit_grade: Option<String> = row.get("audit_grade");
     let audit_score: Option<f64> = row.get("audit_score");
-    let audit = if audit_grade.is_some() || audit_score.is_some() {
-        Some(AuditBrief {
-            grade: audit_grade,
-            score: audit_score,
-        })
-    } else {
-        None
-    };
+    let has_completed_audit = audit_id.is_some();
+    let audit = Some(skill_runthedev_audit_brief(
+        has_completed_audit,
+        audit_grade,
+        audit_score,
+    ));
+    let audit_summary = skill_audit_summary_with_runthedev(
+        row.get::<Option<serde_json::Value>, _>("audit_summary"),
+        has_completed_audit,
+    );
 
     let related_categories: Vec<String> = row
         .get::<Option<serde_json::Value>, _>("categories")
@@ -400,7 +452,7 @@ pub async fn get_skill_detail(
         github_url: row.get("github_url"),
         categories: row.get("categories"),
         quality_score: row.get("quality_score"),
-        audit_summary: row.get("audit_summary"),
+        audit_summary,
         skill_md_content: row.get("skill_md_content"),
         security_audits: row.get("security_audits"),
         stars: row.get("stars"),

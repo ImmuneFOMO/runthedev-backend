@@ -61,4 +61,3 @@ Compact matrix of the deterministic rules currently implemented in `app/rules.py
 | `missing-guardrails-payment` | Payment capability with no auth/approval/guardrail guidance | `high` | `0.5` | Suppressed if guardrail terms are present anywhere |
 | `missing-guardrails-clipboard` | Clipboard access with no scope/approval guidance | `medium` | `0.5` | Suppressed if guardrail terms are present anywhere |
 | `missing-guardrails-notifications` | Notification capability with no scope/auth guidance | `medium` | `0.5` | Suppressed if guardrail terms are present anywhere |
-| `prompt-injection-corpus` | Adversarial prompt patterns / jailbreak corpus detected | `medium` / `high` | `0.7` | Requires 2+ injection marker matches and corpus signal (large doc, README, or corpus marker) |

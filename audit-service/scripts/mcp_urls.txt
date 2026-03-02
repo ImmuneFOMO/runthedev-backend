@@ -1,0 +1,7 @@
+https://github.com/sooperset/mcp-atlassian
+https://github.com/microsoft/playwright-mcp
+https://github.com/brightdata/brightdata-mcp
+https://github.com/wong2/awesome-mcp-servers
+https://github.com/chadgpt/mcp-servers
+https://github.com/pedrojaques99/popular-mcp-serve
+https://github.com/mcpcommunity/mcp-email-server

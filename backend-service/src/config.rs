@@ -19,6 +19,9 @@ pub struct Config {
     pub meili_url: String,
     pub meili_master_key: String,
     pub admin_api_key: String,
+    pub audit_service_url: String,
+    pub audit_poll_interval_seconds: u64,
+    pub audit_http_timeout_seconds: u64,
     pub cors_extra_origins: Vec<String>,
     pub host: String,
     pub port: u16,
@@ -45,6 +48,16 @@ impl Config {
             meili_url: env::var("MEILI_URL").expect("MEILI_URL must be set"),
             meili_master_key,
             admin_api_key,
+            audit_service_url: env::var("AUDIT_SERVICE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
+            audit_poll_interval_seconds: env::var("AUDIT_POLL_INTERVAL_SECONDS")
+                .unwrap_or_else(|_| "10".to_string())
+                .parse()
+                .expect("AUDIT_POLL_INTERVAL_SECONDS must be a valid u64"),
+            audit_http_timeout_seconds: env::var("AUDIT_HTTP_TIMEOUT_SECONDS")
+                .unwrap_or_else(|_| "120".to_string())
+                .parse()
+                .expect("AUDIT_HTTP_TIMEOUT_SECONDS must be a valid u64"),
             cors_extra_origins,
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: env::var("PORT")
