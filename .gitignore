@@ -1,0 +1,36 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env.local
+*.env.production
+*.env.staging
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Rust
+target/
+.sqlx/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+
+# Generated artifacts
+batch_audit_results.json

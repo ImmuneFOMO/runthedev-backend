@@ -1,0 +1,2 @@
+"""MCP skill documentation auditor."""
+
