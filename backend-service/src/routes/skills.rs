@@ -134,6 +134,7 @@ async fn search_skills_path(
             let audit_summary = skill_audit_summary_with_runthedev(
                 row.get::<Option<serde_json::Value>, _>("audit_summary"),
                 has_completed_audit,
+                None,
             );
             let audit = Some(skill_runthedev_audit_brief(
                 has_completed_audit,
@@ -269,6 +270,7 @@ async fn browse_skills_path(
             let audit_summary = skill_audit_summary_with_runthedev(
                 row.get::<Option<serde_json::Value>, _>("audit_summary"),
                 has_completed_audit,
+                None,
             );
             let audit = Some(skill_runthedev_audit_brief(
                 has_completed_audit,
@@ -321,22 +323,137 @@ fn skill_runthedev_audit_brief(
 fn skill_audit_summary_with_runthedev(
     audit_summary: Option<serde_json::Value>,
     has_completed_audit: bool,
+    audit_result: Option<&serde_json::Value>,
 ) -> Option<serde_json::Value> {
-    if has_completed_audit {
-        return audit_summary;
-    }
-
     let mut summary = match audit_summary {
         Some(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
     };
 
-    summary.insert(
-        "RunTheDev".to_string(),
-        serde_json::Value::String("Not started".to_string()),
-    );
+    if has_completed_audit {
+        let status_str = audit_result
+            .and_then(|r| r.get("status"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Completed");
+        summary.insert(
+            "RunTheDev".to_string(),
+            serde_json::Value::String(status_str.to_string()),
+        );
+    } else {
+        summary.insert(
+            "RunTheDev".to_string(),
+            serde_json::Value::String("Not started".to_string()),
+        );
+    }
 
     Some(serde_json::Value::Object(summary))
+}
+
+fn merge_runthedev_into_security_audits(
+    security_audits: Option<serde_json::Value>,
+    has_completed_audit: bool,
+    audit_grade: Option<String>,
+    audit_score: Option<f64>,
+    audit_result: Option<serde_json::Value>,
+    audit_completed_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<serde_json::Value> {
+    let mut audits = match security_audits {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+
+    if !has_completed_audit {
+        return Some(serde_json::Value::Object(audits));
+    }
+
+    let result = audit_result.unwrap_or(serde_json::Value::Null);
+
+    // Build runthedev_detail matching the shape of other providers
+    let status_str = result
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Completed")
+        .to_string();
+    let risk_level = result
+        .get("risk_level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let audit_date = audit_completed_at
+        .map(|dt| dt.format("%b %-d, %Y").to_string())
+        .unwrap_or_default();
+
+    let mut detail = serde_json::Map::new();
+    detail.insert("status".to_string(), serde_json::Value::String(status_str));
+    detail.insert(
+        "risk_level".to_string(),
+        serde_json::Value::String(risk_level),
+    );
+    detail.insert(
+        "audit_date".to_string(),
+        serde_json::Value::String(audit_date.clone()),
+    );
+    detail.insert(
+        "audit_info".to_string(),
+        serde_json::Value::String(format!("Audited by Run The Dev on {audit_date}")),
+    );
+    if let Some(grade) = audit_grade {
+        detail.insert("grade".to_string(), serde_json::Value::String(grade));
+    }
+    if let Some(score) = audit_score {
+        detail.insert("score".to_string(), serde_json::Value::from(score));
+    }
+
+    // Convert full_analysis array to string (frontend expects string like other providers)
+    if let Some(serde_json::Value::Array(items)) = result.get("full_analysis") {
+        let mut lines = Vec::new();
+        for item in items {
+            let severity = item
+                .get("severity")
+                .and_then(|v| v.as_str())
+                .unwrap_or("INFO");
+            let category = item
+                .get("category")
+                .and_then(|v| v.as_str())
+                .unwrap_or("GENERAL");
+            let analysis = item.get("analysis").and_then(|v| v.as_str()).unwrap_or("");
+            lines.push(format!("[{category}] ({severity}):\n{analysis}"));
+        }
+        detail.insert(
+            "full_analysis".to_string(),
+            serde_json::Value::String(lines.join("\n\n")),
+        );
+    }
+
+    // Build categories list from risk_categories
+    if let Some(cats) = result.get("risk_categories") {
+        detail.insert("categories".to_string(), cats.clone());
+    }
+
+    // Build metadata matching other providers' shape
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "Analyzed".to_string(),
+        serde_json::Value::String(audit_date.clone()),
+    );
+    metadata.insert(
+        "Risk Level".to_string(),
+        serde_json::Value::String(
+            result
+                .get("risk_level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("N/A")
+                .to_string(),
+        ),
+    );
+    detail.insert("metadata".to_string(), serde_json::Value::Object(metadata));
+
+    audits.insert(
+        "runthedev_detail".to_string(),
+        serde_json::Value::Object(detail),
+    );
+
+    Some(serde_json::Value::Object(audits))
 }
 
 // ---------------------------------------------------------------------------
@@ -358,10 +475,11 @@ pub async fn get_skill_detail(
             s.activations, s.unique_users, s.upvotes, s.downvotes,
             s.source_count,
             s.created_at, s.updated_at,
-            a.id AS audit_id, a.grade AS audit_grade, a.score AS audit_score
+            a.id AS audit_id, a.grade AS audit_grade, a.score AS audit_score,
+            a.result AS audit_result, a.completed_at AS audit_completed_at
         FROM merged_skills s
         LEFT JOIN LATERAL (
-            SELECT id, grade, score FROM audit_runs
+            SELECT id, grade, score, result, completed_at FROM audit_runs
             WHERE item_type = 'skill' AND item_dedup_key = s.dedup_key AND status = 'completed'
             ORDER BY completed_at DESC LIMIT 1
         ) a ON true
@@ -376,15 +494,18 @@ pub async fn get_skill_detail(
     let audit_id: Option<i32> = row.get("audit_id");
     let audit_grade: Option<String> = row.get("audit_grade");
     let audit_score: Option<f64> = row.get("audit_score");
+    let audit_result: Option<serde_json::Value> = row.get("audit_result");
+    let audit_completed_at: Option<chrono::DateTime<chrono::Utc>> = row.get("audit_completed_at");
     let has_completed_audit = audit_id.is_some();
     let audit = Some(skill_runthedev_audit_brief(
         has_completed_audit,
-        audit_grade,
+        audit_grade.clone(),
         audit_score,
     ));
     let audit_summary = skill_audit_summary_with_runthedev(
         row.get::<Option<serde_json::Value>, _>("audit_summary"),
         has_completed_audit,
+        audit_result.as_ref(),
     );
 
     let related_categories: Vec<String> = row
@@ -454,7 +575,14 @@ pub async fn get_skill_detail(
         quality_score: row.get("quality_score"),
         audit_summary,
         skill_md_content: row.get("skill_md_content"),
-        security_audits: row.get("security_audits"),
+        security_audits: merge_runthedev_into_security_audits(
+            row.get("security_audits"),
+            has_completed_audit,
+            audit_grade,
+            audit_score,
+            audit_result,
+            audit_completed_at,
+        ),
         stars: row.get("stars"),
         forks: row.get("forks"),
         installs: row.get("installs"),

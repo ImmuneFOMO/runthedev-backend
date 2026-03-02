@@ -72,6 +72,8 @@ pub struct ServerDetail {
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit: Option<AuditBrief>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runthedev_audit: Option<serde_json::Value>,
     pub related: Vec<RelatedServer>,
 }
 

@@ -325,10 +325,11 @@ pub async fn get_server_detail(
             jsonb_array_length(COALESCE(s.tools, '[]'::jsonb))::BIGINT AS tools_count,
             s.source_count,
             s.created_at, s.updated_at,
-            a.grade AS audit_grade, a.score AS audit_score
+            a.grade AS audit_grade, a.score AS audit_score,
+            a.result AS audit_result, a.completed_at AS audit_completed_at
         FROM merged_servers s
         LEFT JOIN LATERAL (
-            SELECT grade, score FROM audit_runs
+            SELECT grade, score, result, completed_at FROM audit_runs
             WHERE item_type = 'server' AND item_dedup_key = s.dedup_key AND status = 'completed'
             ORDER BY completed_at DESC LIMIT 1
         ) a ON true
@@ -342,9 +343,12 @@ pub async fn get_server_detail(
 
     let audit_grade: Option<String> = row.get("audit_grade");
     let audit_score: Option<f64> = row.get("audit_score");
-    let audit = if audit_grade.is_some() || audit_score.is_some() {
+    let audit_result: Option<serde_json::Value> = row.get("audit_result");
+    let audit_completed_at: Option<chrono::DateTime<chrono::Utc>> = row.get("audit_completed_at");
+    let has_completed_audit = audit_grade.is_some() || audit_score.is_some();
+    let audit = if has_completed_audit {
         Some(AuditBrief {
-            grade: audit_grade,
+            grade: audit_grade.clone(),
             score: audit_score,
             status: None,
             message: None,
@@ -432,10 +436,116 @@ pub async fn get_server_detail(
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         audit,
+        runthedev_audit: build_server_runthedev_audit(
+            has_completed_audit,
+            audit_grade,
+            audit_score,
+            audit_result,
+            audit_completed_at,
+        ),
         related,
     };
 
     Ok(Json(detail))
+}
+
+fn build_server_runthedev_audit(
+    has_completed_audit: bool,
+    audit_grade: Option<String>,
+    audit_score: Option<f64>,
+    audit_result: Option<serde_json::Value>,
+    audit_completed_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<serde_json::Value> {
+    if !has_completed_audit {
+        return None;
+    }
+
+    let result = audit_result.unwrap_or(serde_json::Value::Null);
+    let audit_date = audit_completed_at
+        .map(|dt| dt.format("%b %-d, %Y").to_string())
+        .unwrap_or_default();
+
+    let mut detail = serde_json::Map::new();
+    detail.insert(
+        "provider".to_string(),
+        serde_json::Value::String("Run The Dev".to_string()),
+    );
+    detail.insert(
+        "audit_date".to_string(),
+        serde_json::Value::String(audit_date.clone()),
+    );
+    if let Some(grade) = audit_grade {
+        detail.insert("grade".to_string(), serde_json::Value::String(grade));
+    }
+    if let Some(score) = audit_score {
+        detail.insert("score".to_string(), serde_json::Value::from(score));
+    }
+
+    let status_str = result
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Completed")
+        .to_string();
+    let risk_level = result
+        .get("risk_level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    detail.insert("status".to_string(), serde_json::Value::String(status_str));
+    detail.insert(
+        "risk_level".to_string(),
+        serde_json::Value::String(risk_level.clone()),
+    );
+    detail.insert(
+        "audit_info".to_string(),
+        serde_json::Value::String(format!("Audited by Run The Dev on {audit_date}")),
+    );
+
+    // Build full_analysis as string from top_risks + safe_usage_recommendations
+    let mut analysis_lines = Vec::new();
+    if let Some(serde_json::Value::Array(risks)) = result.get("top_risks") {
+        for risk in risks {
+            if let Some(text) = risk.as_str() {
+                analysis_lines.push(format!("[RISK] {text}"));
+            }
+        }
+    }
+    if let Some(serde_json::Value::Array(recs)) = result.get("safe_usage_recommendations") {
+        for rec in recs {
+            if let Some(text) = rec.as_str() {
+                analysis_lines.push(format!("[RECOMMENDATION] {text}"));
+            }
+        }
+    }
+    if !analysis_lines.is_empty() {
+        detail.insert(
+            "full_analysis".to_string(),
+            serde_json::Value::String(analysis_lines.join("\n\n")),
+        );
+    }
+
+    // Build metadata matching other providers
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "Analyzed".to_string(),
+        serde_json::Value::String(audit_date),
+    );
+    metadata.insert(
+        "Risk Level".to_string(),
+        serde_json::Value::String(risk_level),
+    );
+    if let Some(sec_score) = result.get("security_score") {
+        metadata.insert("Security Score".to_string(), sec_score.clone());
+    }
+    detail.insert("metadata".to_string(), serde_json::Value::Object(metadata));
+
+    // Copy deployment guidance if present
+    if let Some(dg) = result.get("deployment_guidance") {
+        detail.insert("deployment_guidance".to_string(), dg.clone());
+    }
+
+    Some(serde_json::Value::Object(detail))
 }
 
 // ---------------------------------------------------------------------------
